@@ -1,0 +1,21 @@
+# Python caches and local IDE settings
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+
+# Dataset files remain available locally but are too large for the Git repository
+SHWD_YOLO/images/
+SHWD_YOLO/labels/
+
+# Generated detection artefacts (including large test videos)
+yolov5-master/runs/detect/
+
+# Runtime and experiment by-products
+*.cache
+*.log
+wandb/
+
+# Pretrained weights can be downloaded again; trained baseline weights under
+# yolov5-master/runs/train/**/weights/ are intentionally retained.
+yolov5-master/yolov5s.pt

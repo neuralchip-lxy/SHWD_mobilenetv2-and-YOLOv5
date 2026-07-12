@@ -1,0 +1,6 @@
+train: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/train
+val: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/val
+test: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/test
+
+nc: 2
+names: ['hat', 'person']
