@@ -103,21 +103,28 @@ class DWConv(Conv):
 
 
 class MobileNetV2Block(nn.Module):
-    """MobileNetV2 inverted residual block with depthwise separable convolution."""
+    """MobileNetV2 inverted residual block with ReLU6 activations."""
 
     def __init__(self, c1, c2, s=1, expand=6):
         super().__init__()
         c_ = int(c1 * expand)
         self.use_res_connect = s == 1 and c1 == c2
-        self.conv = nn.Sequential(
-            Conv(c1, c_, 1, 1),
-            Conv(c_, c_, 3, s, g=c_, act=True),
-            nn.Conv2d(c_, c2, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(c2),
+        layers = []
+        if expand != 1:
+            layers.append(Conv(c1, c_, 1, act=nn.ReLU6(inplace=True)))
+        layers.extend(
+            (
+                Conv(c_, c_, 3, s, g=c_, act=nn.ReLU6(inplace=True)),
+                nn.Conv2d(c_, c2, 1, bias=False),
+                nn.BatchNorm2d(c2),
+            )
         )
+        self.conv = nn.Sequential(*layers)
 
     def forward(self, x):
         return x + self.conv(x) if self.use_res_connect else self.conv(x)
+
+
 class DWConvTranspose2d(nn.ConvTranspose2d):
     """A depth-wise transpose convolutional layer for upsampling in neural networks, particularly in YOLOv5 models."""
 

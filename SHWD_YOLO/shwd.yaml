@@ -1,6 +1,6 @@
-train: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/train
-val: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/val
-test: E:/codex_work/研究方向/datasets/SHWD_YOLO/images/test
+path: E:/codex_work/experiment of mobilenet2 and YOLO5/SHWD_YOLO
+train: images/train
+val: images/val
 
 nc: 2
-names: ['hat', 'person']
+names: [hat, person]
