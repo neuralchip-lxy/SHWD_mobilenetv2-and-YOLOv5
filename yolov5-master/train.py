@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from torch.optim import lr_scheduler
 from tqdm import tqdm
@@ -101,6 +102,23 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable
 RANK = int(os.getenv("RANK", -1))
 WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 GIT_INFO = check_git_info()
+
+
+def compute_distillation_loss(student_predictions, teacher_predictions, temperature):
+    """Computes objectness and class-logit distillation loss for matching YOLO detection heads."""
+    if len(student_predictions) != len(teacher_predictions):
+        raise ValueError("Teacher and student must have the same number of detection heads for output distillation.")
+
+    loss = 0.0
+    for student, teacher in zip(student_predictions, teacher_predictions):
+        if student.shape != teacher.shape:
+            raise ValueError(
+                "Teacher and student detection outputs must have matching shapes. "
+                f"Got student {tuple(student.shape)} and teacher {tuple(teacher.shape)}."
+            )
+        teacher_targets = torch.sigmoid(teacher[..., 4:] / temperature)
+        loss += F.binary_cross_entropy_with_logits(student[..., 4:] / temperature, teacher_targets) * temperature**2
+    return loss / len(student_predictions)
 
 
 def train(hyp, opt, device, callbacks):
@@ -224,6 +242,19 @@ def train(hyp, opt, device, callbacks):
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+
+    teacher = None
+    if opt.teacher_weights:
+        teacher_ckpt = torch_load(attempt_download(opt.teacher_weights), map_location="cpu")
+        teacher = (teacher_ckpt.get("ema") or teacher_ckpt["model"]).to(device).float().eval()
+        if teacher.nc != nc:
+            raise ValueError(f"Teacher classes ({teacher.nc}) do not match dataset classes ({nc}).")
+        for parameter in teacher.parameters():
+            parameter.requires_grad_(False)
+        LOGGER.info(
+            f"Knowledge distillation: teacher={opt.teacher_weights}, weight={opt.distill_weight}, "
+            f"temperature={opt.distill_temperature}"
+        )
     amp = check_amp(model)  # check AMP
 
     # Freeze
@@ -415,6 +446,12 @@ def train(hyp, opt, device, callbacks):
             with smart_amp_autocast(amp):
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                if teacher:
+                    with torch.no_grad():
+                        teacher_output = teacher(imgs)
+                    teacher_predictions = teacher_output[1] if isinstance(teacher_output, tuple) else teacher_output
+                    distill_loss = compute_distillation_loss(pred, teacher_predictions, opt.distill_temperature)
+                    loss += opt.distill_weight * distill_loss
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -569,7 +606,10 @@ def parse_opt(known=False):
     parser.add_argument("--weights", type=str, default=ROOT / "yolov5s.pt", help="initial weights path")
     parser.add_argument("--cfg", type=str, default="", help="model.yaml path")
     parser.add_argument("--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path")
-    parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.scratch-low.yaml", help="hyperparameters path")
+    parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.w075_distill.yaml", help="hyperparameters path")
+    parser.add_argument("--teacher-weights", type=str, default="", help="teacher .pt weights for knowledge distillation")
+    parser.add_argument("--distill-weight", type=float, default=0.1, help="knowledge-distillation loss weight")
+    parser.add_argument("--distill-temperature", type=float, default=2.0, help="knowledge-distillation temperature")
     parser.add_argument("--epochs", type=int, default=100, help="total training epochs")
     parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
@@ -928,7 +968,7 @@ def run(**kwargs):
         cfg (str, optional): Path to model YAML configuration. Defaults to an empty string.
         data (str, optional): Path to dataset YAML configuration. Defaults to ROOT / 'data/coco128.yaml'.
         hyp (str, optional): Path to hyperparameters YAML configuration. Defaults to ROOT /
-            'data/hyps/hyp.scratch-low.yaml'.
+            'data/hyps/hyp.w075_distill.yaml'.
         epochs (int, optional): Total number of training epochs. Defaults to 100.
         batch_size (int, optional): Total batch size for all GPUs. Use -1 for automatic batch size determination.
             Defaults to 16.
