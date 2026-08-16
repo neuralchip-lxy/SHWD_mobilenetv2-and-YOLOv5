@@ -1,6 +1,6 @@
 path: E:/codex_work/experiment of mobilenet2 and YOLO5/SHWD_YOLO
 train: images/train
 val: images/val
-
+test: images/test
 nc: 2
 names: [hat, person]
