@@ -49,6 +49,7 @@ from models.common import (
     GhostConv,
     MobileNetV2Block,
     Proto,
+    SGCF,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -413,6 +414,7 @@ def parse_model(d, ch):
             SPP,
             SPPF,
             DWConv,
+            SGCF,
             MobileNetV2Block,
             MixConv2d,
             Focus,

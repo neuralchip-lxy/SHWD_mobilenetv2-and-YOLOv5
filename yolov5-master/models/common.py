@@ -101,6 +101,26 @@ class DWConv(Conv):
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
 
+class SGCF(nn.Module):
+    """Fuses equal-channel P3 detail and aligned P4 semantic features with a lightweight semantic gate."""
+
+    def __init__(self, c1, c2):
+        super().__init__()
+        assert c1 % 2 == 0, f"SGCF expects concatenated equal-channel features, got {c1} channels"
+        c = c1 // 2
+        self.detail = Conv(c, c2, 1, 1, act=False)
+        self.context = Conv(c, c2, 1, 1)
+        self.gate = nn.Sequential(nn.Conv2d(c2, c2, 1, bias=True), nn.Sigmoid())
+        self.refine = DWConv(c2, c2, 3, 1)
+
+    def forward(self, x):
+        """Enhances P3 detail with a P4-semantic gate while retaining a residual detail path."""
+        detail, context = x.chunk(2, 1)
+        detail = self.detail(detail)
+        context = self.context(context)
+        return detail + self.refine(detail * self.gate(context) + context)
+
+
 
 class MobileNetV2Block(nn.Module):
     """MobileNetV2 inverted residual block with ReLU6 activations."""
