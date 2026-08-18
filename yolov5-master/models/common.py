@@ -121,6 +121,26 @@ class SGCF(nn.Module):
         return detail + self.refine(detail * self.gate(context) + context)
 
 
+class RGCF(nn.Module):
+    """Uses P4 semantics only to gate a residual P3-detail refinement branch."""
+
+    def __init__(self, c1, c2):
+        super().__init__()
+        assert c1 % 2 == 0, f"RGCF expects concatenated equal-channel features, got {c1} channels"
+        c = c1 // 2
+        self.detail = Conv(c, c2, 1, 1, act=False)
+        self.context = Conv(c, c2, 1, 1)
+        self.gate = nn.Sequential(nn.Conv2d(c2, c2, 1, bias=True), nn.Sigmoid())
+        self.refine = DWConv(c2, c2, 3, 1)
+
+    def forward(self, x):
+        """Adds a semantic-gated refinement to P3 without directly injecting P4 feature values."""
+        detail, context = x.chunk(2, 1)
+        detail = self.detail(detail)
+        gate = self.gate(self.context(context))
+        return detail + self.refine(detail * gate)
+
+
 
 class MobileNetV2Block(nn.Module):
     """MobileNetV2 inverted residual block with ReLU6 activations."""

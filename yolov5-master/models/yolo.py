@@ -49,6 +49,7 @@ from models.common import (
     GhostConv,
     MobileNetV2Block,
     Proto,
+    RGCF,
     SGCF,
 )
 from models.experimental import MixConv2d
@@ -414,6 +415,7 @@ def parse_model(d, ch):
             SPP,
             SPPF,
             DWConv,
+            RGCF,
             SGCF,
             MobileNetV2Block,
             MixConv2d,
