@@ -121,6 +121,63 @@ def compute_distillation_loss(student_predictions, teacher_predictions, temperat
     return loss / len(student_predictions)
 
 
+def compute_sccd_loss(
+    student_predictions,
+    teacher_predictions,
+    targets,
+    temperature,
+    image_size,
+    p3_small_weight,
+    hat_weight,
+    confidence_threshold,
+    small_object_area,
+):
+    """Compute scale-class-confidence distillation loss for safety-helmet detection."""
+    if len(student_predictions) != len(teacher_predictions):
+        raise ValueError("Teacher and student must have the same number of detection heads for output distillation.")
+
+    loss = 0.0
+    targets = targets.to(student_predictions[0].device)
+    for head_index, (student, teacher) in enumerate(zip(student_predictions, teacher_predictions)):
+        if student.shape != teacher.shape:
+            raise ValueError(
+                "Teacher and student detection outputs must have matching shapes. "
+                f"Got student {tuple(student.shape)} and teacher {tuple(teacher.shape)}."
+            )
+
+        _, anchors, grid_y, grid_x, _ = student.shape
+        teacher_confidence = torch.sigmoid(teacher[..., 4])
+        confidence_weight = teacher_confidence.ge(confidence_threshold).float()
+        cell_weight = confidence_weight.permute(0, 2, 3, 1).reshape(-1, anchors).clone()
+        if targets.numel():
+            image_index = targets[:, 0].long()
+            class_index = targets[:, 1].long()
+            grid_column = (targets[:, 2] * grid_x).long().clamp_(max=grid_x - 1)
+            grid_row = (targets[:, 3] * grid_y).long().clamp_(max=grid_y - 1)
+            target_weight = torch.where(class_index == 0, hat_weight, 1.0).to(cell_weight)
+            target_area = targets[:, 4] * targets[:, 5] * image_size * image_size
+            if head_index == 0:
+                target_weight = torch.where(target_area < small_object_area, target_weight * p3_small_weight, target_weight)
+            cell_index = image_index * grid_y * grid_x + grid_row * grid_x + grid_column
+            cell_weight.scatter_reduce_(
+                0,
+                cell_index[:, None].expand(-1, anchors),
+                target_weight[:, None].expand(-1, anchors),
+                reduce="amax",
+                include_self=True,
+            )
+        cell_weight = cell_weight.reshape(student.shape[0], grid_y, grid_x, anchors).permute(0, 3, 1, 2)
+
+        teacher_targets = torch.sigmoid(teacher[..., 4:] / temperature)
+        per_logit_loss = F.binary_cross_entropy_with_logits(
+            student[..., 4:] / temperature, teacher_targets, reduction="none"
+        ) * temperature**2
+        loss += (per_logit_loss * cell_weight.unsqueeze(-1)).sum() / (
+            cell_weight.sum().clamp_min(1.0) * per_logit_loss.shape[-1]
+        )
+    return loss / len(student_predictions)
+
+
 def train(hyp, opt, device, callbacks):
     """Train a YOLOv5 model on a custom dataset using specified hyperparameters, options, and device, managing datasets,
     model architecture, loss computation, and optimizer steps.
@@ -252,9 +309,16 @@ def train(hyp, opt, device, callbacks):
         for parameter in teacher.parameters():
             parameter.requires_grad_(False)
         LOGGER.info(
-            f"Knowledge distillation: teacher={opt.teacher_weights}, weight={opt.distill_weight}, "
-            f"temperature={opt.distill_temperature}"
+            f"Knowledge distillation: mode={opt.distill_mode}, teacher={opt.teacher_weights}, "
+            f"weight={opt.distill_weight}, temperature={opt.distill_temperature}"
         )
+        if opt.distill_mode == "sccd":
+            LOGGER.info(
+                "SCCD settings: "
+                f"p3_small_weight={opt.distill_p3_small_weight}, hat_weight={opt.distill_hat_weight}, "
+                f"confidence_threshold={opt.distill_confidence_threshold}, "
+                f"small_object_area={opt.distill_small_object_area}"
+            )
     amp = check_amp(model)  # check AMP
 
     # Freeze
@@ -450,7 +514,20 @@ def train(hyp, opt, device, callbacks):
                     with torch.no_grad():
                         teacher_output = teacher(imgs)
                     teacher_predictions = teacher_output[1] if isinstance(teacher_output, tuple) else teacher_output
-                    distill_loss = compute_distillation_loss(pred, teacher_predictions, opt.distill_temperature)
+                    if opt.distill_mode == "sccd":
+                        distill_loss = compute_sccd_loss(
+                            pred,
+                            teacher_predictions,
+                            targets,
+                            opt.distill_temperature,
+                            imgs.shape[-1],
+                            opt.distill_p3_small_weight,
+                            opt.distill_hat_weight,
+                            opt.distill_confidence_threshold,
+                            opt.distill_small_object_area,
+                        )
+                    else:
+                        distill_loss = compute_distillation_loss(pred, teacher_predictions, opt.distill_temperature)
                     loss += opt.distill_weight * distill_loss
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
@@ -610,6 +687,15 @@ def parse_opt(known=False):
     parser.add_argument("--teacher-weights", type=str, default="", help="teacher .pt weights for knowledge distillation")
     parser.add_argument("--distill-weight", type=float, default=0.1, help="knowledge-distillation loss weight")
     parser.add_argument("--distill-temperature", type=float, default=2.0, help="knowledge-distillation temperature")
+    parser.add_argument("--distill-mode", choices=("vanilla", "sccd"), default="vanilla", help="distillation loss mode")
+    parser.add_argument("--distill-p3-small-weight", type=float, default=1.5, help="SCCD weight for small targets on P3")
+    parser.add_argument("--distill-hat-weight", type=float, default=1.5, help="SCCD weight for hat targets")
+    parser.add_argument(
+        "--distill-confidence-threshold", type=float, default=0.25, help="SCCD teacher objectness threshold"
+    )
+    parser.add_argument(
+        "--distill-small-object-area", type=float, default=1024.0, help="SCCD small-object area at input size"
+    )
     parser.add_argument("--epochs", type=int, default=100, help="total training epochs")
     parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
