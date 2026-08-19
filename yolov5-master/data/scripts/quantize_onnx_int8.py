@@ -64,6 +64,16 @@ def detect_head_nodes(model_path):
     return [node.name for node in graph.node[start_index:] if node.name]
 
 
+def layer_weight_nodes(model_path, layer_indices):
+    """Return convolution nodes whose trained weights belong to selected YOLO macro-layers."""
+    prefixes = tuple(f"model.{index}." for index in layer_indices)
+    return [
+        node.name
+        for node in onnx.load(model_path).graph.node
+        if node.name and any(input_name.startswith(prefixes) for input_name in node.input)
+    ]
+
+
 def parse_opt():
     """Parse static quantization options."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -73,6 +83,9 @@ def parse_opt():
     parser.add_argument("--imgsz", type=int, default=640, help="letterbox image size")
     parser.add_argument("--calibration-images", type=int, default=128, help="number of calibration images")
     parser.add_argument("--protect-detect", action="store_true", help="retain Detect-head and decode nodes in FP32")
+    parser.add_argument(
+        "--protect-layers", nargs="+", type=int, default=[], help="YOLO macro-layer Conv nodes to retain in FP32"
+    )
     return parser.parse_args()
 
 
@@ -80,7 +93,12 @@ if __name__ == "__main__":
     options = parse_opt()
     options.output.parent.mkdir(parents=True, exist_ok=True)
     reader = ImageCalibrationReader(options.model, options.calibration_dir, options.imgsz, options.calibration_images)
-    nodes_to_exclude = detect_head_nodes(options.model) if options.protect_detect else None
+    nodes_to_exclude = []
+    if options.protect_detect:
+        nodes_to_exclude.extend(detect_head_nodes(options.model))
+    if options.protect_layers:
+        nodes_to_exclude.extend(layer_weight_nodes(options.model, options.protect_layers))
+    nodes_to_exclude = list(dict.fromkeys(nodes_to_exclude)) or None
     quantize_static(
         str(options.model),
         str(options.output),
@@ -92,5 +110,5 @@ if __name__ == "__main__":
         calibrate_method=CalibrationMethod.MinMax,
         nodes_to_exclude=nodes_to_exclude,
     )
-    protected = f"; retained {len(nodes_to_exclude)} Detect/decode nodes in FP32" if nodes_to_exclude else ""
+    protected = f"; retained {len(nodes_to_exclude)} selected nodes in FP32" if nodes_to_exclude else ""
     print(f"INT8 ONNX saved to {options.output} using {len(reader.image_paths)} calibration images{protected}")
