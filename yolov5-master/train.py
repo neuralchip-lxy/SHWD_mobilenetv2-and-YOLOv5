@@ -178,6 +178,25 @@ def compute_sccd_loss(
     return loss / len(student_predictions)
 
 
+def is_structured_pruning_candidate(module_name):
+    """Return whether a BatchNorm belongs to the initial FPGA-oriented pruning region."""
+    parts = module_name.split(".")
+    try:
+        layer_index = int(parts[parts.index("model") + 1])
+    except (ValueError, IndexError):
+        return False
+    return 6 <= layer_index <= 14 or 19 <= layer_index <= 24
+
+
+def compute_bn_sparsity_loss(model):
+    """Penalize BatchNorm scales only in P4/P5 and neck pruning-candidate layers."""
+    sparsity_loss = 0.0
+    for module_name, module in model.named_modules():
+        if isinstance(module, nn.BatchNorm2d) and is_structured_pruning_candidate(module_name):
+            sparsity_loss += module.weight.abs().sum()
+    return sparsity_loss
+
+
 def train(hyp, opt, device, callbacks):
     """Train a YOLOv5 model on a custom dataset using specified hyperparameters, options, and device, managing datasets,
     model architecture, loss computation, and optimizer steps.
@@ -319,6 +338,12 @@ def train(hyp, opt, device, callbacks):
                 f"confidence_threshold={opt.distill_confidence_threshold}, "
                 f"small_object_area={opt.distill_small_object_area}"
             )
+    if opt.bn_sparsity:
+        LOGGER.info(
+            "Structured-pruning sparsity regularization: "
+            f"weight={opt.bn_sparsity}, start_epoch={opt.bn_sparsity_start}, "
+            "protected_layers=P3_and_Detect, candidate_layers=P4_P5_and_neck"
+        )
     amp = check_amp(model)  # check AMP
 
     # Freeze
@@ -529,6 +554,8 @@ def train(hyp, opt, device, callbacks):
                     else:
                         distill_loss = compute_distillation_loss(pred, teacher_predictions, opt.distill_temperature)
                     loss += opt.distill_weight * distill_loss
+                if opt.bn_sparsity and epoch >= opt.bn_sparsity_start:
+                    loss += opt.bn_sparsity * compute_bn_sparsity_loss(model)
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -695,6 +722,12 @@ def parse_opt(known=False):
     )
     parser.add_argument(
         "--distill-small-object-area", type=float, default=1024.0, help="SCCD small-object area at input size"
+    )
+    parser.add_argument(
+        "--bn-sparsity", type=float, default=0.0, help="L1 weight for BatchNorm scales in structured-pruning candidates"
+    )
+    parser.add_argument(
+        "--bn-sparsity-start", type=int, default=20, help="epoch at which BN sparsity regularization begins"
     )
     parser.add_argument("--epochs", type=int, default=100, help="total training epochs")
     parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch")
