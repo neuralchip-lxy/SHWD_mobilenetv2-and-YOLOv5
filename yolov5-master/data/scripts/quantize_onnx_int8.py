@@ -74,6 +74,16 @@ def layer_weight_nodes(model_path, layer_indices):
     ]
 
 
+def layer_weight_tensors(model_path, layer_indices):
+    """Return convolution weight tensors belonging to selected YOLO macro-layers."""
+    prefixes = tuple(f"model.{index}." for index in layer_indices)
+    return [
+        node.input[1]
+        for node in onnx.load(model_path).graph.node
+        if node.op_type == "Conv" and len(node.input) > 1 and node.input[1].startswith(prefixes)
+    ]
+
+
 def parse_opt():
     """Parse static quantization options."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -85,6 +95,9 @@ def parse_opt():
     parser.add_argument("--protect-detect", action="store_true", help="retain Detect-head and decode nodes in FP32")
     parser.add_argument(
         "--protect-layers", nargs="+", type=int, default=[], help="YOLO macro-layer Conv nodes to retain in FP32"
+    )
+    parser.add_argument(
+        "--int4-layers", nargs="+", type=int, default=[], help="YOLO macro-layer Conv weights to quantize to INT4"
     )
     return parser.parse_args()
 
@@ -99,6 +112,10 @@ if __name__ == "__main__":
     if options.protect_layers:
         nodes_to_exclude.extend(layer_weight_nodes(options.model, options.protect_layers))
     nodes_to_exclude = list(dict.fromkeys(nodes_to_exclude)) or None
+    int4_weights = layer_weight_tensors(options.model, options.int4_layers)
+    tensor_quant_overrides = {
+        weight_name: [{"quant_type": QuantType.QInt4, "axis": 0}] for weight_name in int4_weights
+    }
     quantize_static(
         str(options.model),
         str(options.output),
@@ -109,6 +126,9 @@ if __name__ == "__main__":
         weight_type=QuantType.QInt8,
         calibrate_method=CalibrationMethod.MinMax,
         nodes_to_exclude=nodes_to_exclude,
+        extra_options={"TensorQuantOverrides": tensor_quant_overrides},
     )
     protected = f"; retained {len(nodes_to_exclude)} selected nodes in FP32" if nodes_to_exclude else ""
-    print(f"INT8 ONNX saved to {options.output} using {len(reader.image_paths)} calibration images{protected}")
+    int4_message = f"; quantized {len(int4_weights)} Conv weights to INT4" if int4_weights else ""
+    precision = "Mixed INT4/INT8" if int4_weights else "INT8"
+    print(f"{precision} ONNX saved to {options.output} using {len(reader.image_paths)} calibration images{protected}{int4_message}")
