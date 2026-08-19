@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import onnx
 import onnxruntime as ort
 from onnxruntime.quantization import CalibrationDataReader, CalibrationMethod, QuantFormat, QuantType, quantize_static
 
@@ -47,6 +48,22 @@ class ImageCalibrationReader(CalibrationDataReader):
         return {self.input_name: image[None]}
 
 
+def detect_head_nodes(model_path):
+    """Return the final YOLO Detect-head and decode nodes to retain in FP32."""
+    graph = onnx.load(model_path).graph
+    start_index = next(
+        (
+            index
+            for index, node in enumerate(graph.node)
+            if any(input_name.startswith("model.25.m.") for input_name in node.input)
+        ),
+        None,
+    )
+    if start_index is None:
+        raise ValueError("Could not identify YOLO Detect-head nodes in the ONNX graph.")
+    return [node.name for node in graph.node[start_index:] if node.name]
+
+
 def parse_opt():
     """Parse static quantization options."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -55,6 +72,7 @@ def parse_opt():
     parser.add_argument("--output", required=True, type=Path, help="INT8 ONNX output")
     parser.add_argument("--imgsz", type=int, default=640, help="letterbox image size")
     parser.add_argument("--calibration-images", type=int, default=128, help="number of calibration images")
+    parser.add_argument("--protect-detect", action="store_true", help="retain Detect-head and decode nodes in FP32")
     return parser.parse_args()
 
 
@@ -62,6 +80,7 @@ if __name__ == "__main__":
     options = parse_opt()
     options.output.parent.mkdir(parents=True, exist_ok=True)
     reader = ImageCalibrationReader(options.model, options.calibration_dir, options.imgsz, options.calibration_images)
+    nodes_to_exclude = detect_head_nodes(options.model) if options.protect_detect else None
     quantize_static(
         str(options.model),
         str(options.output),
@@ -71,5 +90,7 @@ if __name__ == "__main__":
         activation_type=QuantType.QUInt8,
         weight_type=QuantType.QInt8,
         calibrate_method=CalibrationMethod.MinMax,
+        nodes_to_exclude=nodes_to_exclude,
     )
-    print(f"INT8 ONNX saved to {options.output} using {len(reader.image_paths)} calibration images")
+    protected = f"; retained {len(nodes_to_exclude)} Detect/decode nodes in FP32" if nodes_to_exclude else ""
+    print(f"INT8 ONNX saved to {options.output} using {len(reader.image_paths)} calibration images{protected}")
