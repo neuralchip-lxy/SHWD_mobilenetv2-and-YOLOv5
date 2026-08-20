@@ -91,6 +91,46 @@ class Conv(nn.Module):
         return self.act(self.conv(x))
 
 
+class QATConv2d(nn.Conv2d):
+    """Conv2d with per-output-channel fake weight quantization for mixed-precision QAT."""
+
+    def __init__(self, *args, quant_bits=8, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.quant_bits = quant_bits
+        self.qat_enabled = True
+
+    @classmethod
+    def from_conv(cls, conv, quant_bits):
+        """Create a QAT convolution with the same parameters and weights as an existing Conv2d."""
+        qat_conv = cls(
+            conv.in_channels,
+            conv.out_channels,
+            conv.kernel_size,
+            conv.stride,
+            conv.padding,
+            conv.dilation,
+            conv.groups,
+            conv.bias is not None,
+            conv.padding_mode,
+            quant_bits=quant_bits,
+        ).to(device=conv.weight.device, dtype=conv.weight.dtype)
+        qat_conv.load_state_dict(conv.state_dict())
+        return qat_conv
+
+    def _fake_quantized_weight(self):
+        """Return a symmetric INT4/INT8 per-channel fake-quantized weight using STE."""
+        if not self.qat_enabled:
+            return self.weight
+        qmax = float(2 ** (self.quant_bits - 1) - 1)
+        scale = self.weight.detach().abs().amax(dim=(1, 2, 3), keepdim=True).clamp_min(1e-8) / qmax
+        quantized = (self.weight / scale).round().clamp_(-qmax, qmax) * scale
+        return self.weight + (quantized - self.weight).detach()
+
+    def forward(self, x):
+        """Apply convolution with quantization-aware fake weights during QAT fine-tuning."""
+        return self._conv_forward(x, self._fake_quantized_weight(), self.bias)
+
+
 class DWConv(Conv):
     """Implements a depth-wise convolution layer with optional activation for efficient spatial filtering."""
 

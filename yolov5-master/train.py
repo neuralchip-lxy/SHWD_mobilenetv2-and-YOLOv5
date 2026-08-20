@@ -49,6 +49,7 @@ from ultralytics.utils.patches import torch_load
 
 import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
+from models.common import QATConv2d
 from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
@@ -197,6 +198,32 @@ def compute_bn_sparsity_loss(model):
     return sparsity_loss
 
 
+def enable_mixed_precision_qat(model, int4_layer_indices):
+    """Replace backbone/neck Conv2d modules with fake-quantized QATConv2d modules.
+
+    Detection-head layer 25 remains FP32. The selected deep layers use INT4 weights,
+    while every other backbone/neck convolution uses INT8 weights.
+    """
+    int4_layer_indices = set(int4_layer_indices)
+    replaced = {4: 0, 8: 0}
+
+    def replace_convolutions(parent, bits):
+        for name, child in list(parent.named_children()):
+            if isinstance(child, QATConv2d):
+                continue
+            if isinstance(child, nn.Conv2d):
+                setattr(parent, name, QATConv2d.from_conv(child, quant_bits=bits))
+                replaced[bits] += 1
+            else:
+                replace_convolutions(child, bits)
+
+    for layer_index, layer in enumerate(model.model):
+        if layer_index == len(model.model) - 1:  # Detect head stays FP32
+            continue
+        replace_convolutions(layer, 4 if layer_index in int4_layer_indices else 8)
+    return replaced
+
+
 def train(hyp, opt, device, callbacks):
     """Train a YOLOv5 model on a custom dataset using specified hyperparameters, options, and device, managing datasets,
     model architecture, loss computation, and optimizer steps.
@@ -318,6 +345,14 @@ def train(hyp, opt, device, callbacks):
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+
+    if opt.qat_mixed:
+        qat_modules = enable_mixed_precision_qat(model, opt.qat_int4_layers)
+        LOGGER.info(
+            "Mixed-precision fake-QAT enabled: "
+            f"INT4 Conv modules={qat_modules[4]} in layers={opt.qat_int4_layers}; "
+            f"INT8 Conv modules={qat_modules[8]}; Detect head=FP32"
+        )
 
     teacher = None
     if opt.teacher_weights:
@@ -728,6 +763,16 @@ def parse_opt(known=False):
     )
     parser.add_argument(
         "--bn-sparsity-start", type=int, default=20, help="epoch at which BN sparsity regularization begins"
+    )
+    parser.add_argument(
+        "--qat-mixed", action="store_true", help="enable mixed INT4/INT8 fake-quantization-aware fine-tuning"
+    )
+    parser.add_argument(
+        "--qat-int4-layers",
+        nargs="+",
+        type=int,
+        default=[6, 7, 8, 9, 10],
+        help="model-layer indices simulated as INT4; other backbone/neck Conv layers simulate INT8",
     )
     parser.add_argument("--epochs", type=int, default=100, help="total training epochs")
     parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch")
