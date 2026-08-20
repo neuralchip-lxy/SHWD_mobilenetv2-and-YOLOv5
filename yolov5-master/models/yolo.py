@@ -49,6 +49,7 @@ from models.common import (
     GhostConv,
     MobileNetV2Block,
     Proto,
+    QCoordAtt,
     RGCF,
     SGCF,
 )
@@ -415,6 +416,7 @@ def parse_model(d, ch):
             SPP,
             SPPF,
             DWConv,
+            QCoordAtt,
             RGCF,
             SGCF,
             MobileNetV2Block,

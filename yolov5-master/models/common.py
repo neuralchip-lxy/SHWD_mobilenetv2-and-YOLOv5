@@ -141,6 +141,27 @@ class RGCF(nn.Module):
         return detail + self.refine(detail * gate)
 
 
+class QCoordAtt(nn.Module):
+    """Quantization-friendly coordinate attention for spatially precise feature refinement."""
+
+    def __init__(self, c1, c2, reduction=32):
+        super().__init__()
+        assert c1 == c2, f"QCoordAtt preserves channels, got {c1} input and {c2} output channels"
+        c_ = max(8, c1 // reduction)
+        self.reduce = nn.Sequential(nn.Conv2d(c1, c_, 1, bias=False), nn.BatchNorm2d(c_), nn.ReLU6(inplace=True))
+        self.height_gate = nn.Conv2d(c_, c2, 1, bias=True)
+        self.width_gate = nn.Conv2d(c_, c2, 1, bias=True)
+        self.gate = nn.Hardsigmoid()
+
+    def forward(self, x):
+        """Encodes height and width context separately before applying coordinate-aware gates."""
+        height, width = x.shape[2:]
+        x_h = x.mean(3, keepdim=True)
+        x_w = x.mean(2, keepdim=True).transpose(2, 3)
+        x_h, x_w = self.reduce(torch.cat((x_h, x_w), 2)).split((height, width), 2)
+        return x * self.gate(self.height_gate(x_h)) * self.gate(self.width_gate(x_w.transpose(2, 3)))
+
+
 
 class MobileNetV2Block(nn.Module):
     """MobileNetV2 inverted residual block with ReLU6 activations."""
