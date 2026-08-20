@@ -132,6 +132,13 @@ class ComputeLoss:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  # P3-P7
         self.ssi = list(m.stride).index(16) if autobalance else 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
+        self.box_loss = h.get("box_loss", "ciou").lower()
+        if self.box_loss not in {"ciou", "wiou"}:
+            raise ValueError(f"Unsupported box_loss '{self.box_loss}'. Use 'ciou' or 'wiou'.")
+        self.wiou_mean = torch.ones(1, device=device)
+        self.wiou_momentum = h.get("wiou_momentum", 0.01)
+        self.wiou_alpha = h.get("wiou_alpha", 1.7)
+        self.wiou_delta = h.get("wiou_delta", 2.7)
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
@@ -157,8 +164,12 @@ class ComputeLoss:
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()  # iou(prediction, target)
-                lbox += (1.0 - iou).mean()  # iou loss
+                iou = bbox_iou(pbox, tbox[i]).squeeze()  # IoU(prediction, target)
+                if self.box_loss == "wiou":
+                    lbox += self.wiou(pbox, tbox[i], iou).mean()
+                else:
+                    ciou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()
+                    lbox += (1.0 - ciou).mean()
 
                 # Objectness
                 iou = iou.detach().clamp(0).type(tobj.dtype)
@@ -188,6 +199,22 @@ class ComputeLoss:
         bs = tobj.shape[0]  # batch size
 
         return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls)).detach()
+
+    def wiou(self, pbox, tbox, iou):
+        """Computes WIoU-v3 regression loss with a running non-monotonic focusing factor."""
+        pxy, pwh = pbox[:, :2], pbox[:, 2:]
+        txy, twh = tbox[:, :2], tbox[:, 2:]
+        pxyxy = torch.cat((pxy - pwh / 2, pxy + pwh / 2), 1)
+        txyxy = torch.cat((txy - twh / 2, txy + twh / 2), 1)
+        enclosing_wh = torch.maximum(pxyxy[:, 2:], txyxy[:, 2:]) - torch.minimum(pxyxy[:, :2], txyxy[:, :2])
+        center_distance = (pxy - txy).square().sum(1)
+        enclosing_diagonal = enclosing_wh.square().sum(1).clamp_min(1e-7)
+        base_loss = 1.0 - iou
+        with torch.no_grad():
+            self.wiou_mean.mul_(1.0 - self.wiou_momentum).add_(self.wiou_momentum * base_loss.detach().mean())
+        beta = base_loss.detach() / self.wiou_mean.clamp_min(1e-7)
+        focus = beta / (self.wiou_delta * self.wiou_alpha ** (beta - self.wiou_delta))
+        return torch.exp(center_distance / enclosing_diagonal.detach()) * base_loss * focus
 
     def build_targets(self, p, targets):
         """Prepares model targets from input targets (image,class,x,y,w,h) for loss computation, returning class, box,
