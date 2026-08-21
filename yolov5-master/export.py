@@ -67,6 +67,7 @@ if str(ROOT) not in sys.path:
 if platform.system() != "Windows":
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
+from models.common import QATConv2d
 from models.experimental import attempt_load
 from models.yolo import ClassificationModel, Detect, DetectionModel, SegmentationModel
 from utils.dataloaders import LoadImages
@@ -1298,6 +1299,7 @@ def run(
     topk_all=100,  # TF.js NMS: topk for all classes to keep
     iou_thres=0.45,  # TF.js NMS: IoU threshold
     conf_thres=0.25,  # TF.js NMS: confidence threshold
+    disable_qat=False,  # disable training-only fake quantization before export
 ):
     """Exports a YOLOv5 model to specified formats including ONNX, TensorRT, CoreML, and TensorFlow.
 
@@ -1380,6 +1382,13 @@ def run(
         assert device.type != "cpu" or coreml, "--half only compatible with GPU export, i.e. use --device 0"
         assert not dynamic, "--half not compatible with --dynamic, i.e. use either --half or --dynamic but not both"
     model = attempt_load(weights, device=device, inplace=True, fuse=True)  # load FP32 model
+    if disable_qat:
+        disabled_modules = 0
+        for module in model.modules():
+            if isinstance(module, QATConv2d):
+                module.qat_enabled = False
+                disabled_modules += 1
+        LOGGER.info(f"Disabled fake quantization in {disabled_modules} QAT convolution modules for FP32 export")
 
     # Checks
     imgsz *= 2 if len(imgsz) == 1 else 1  # expand
@@ -1520,6 +1529,9 @@ def parse_opt(known=False):
     parser.add_argument("--topk-all", type=int, default=100, help="TF.js NMS: topk for all classes to keep")
     parser.add_argument("--iou-thres", type=float, default=0.45, help="TF.js NMS: IoU threshold")
     parser.add_argument("--conf-thres", type=float, default=0.25, help="TF.js NMS: confidence threshold")
+    parser.add_argument(
+        "--disable-qat", action="store_true", help="disable training-only fake quantization before exporting FP32 ONNX"
+    )
     parser.add_argument(
         "--include",
         nargs="+",
