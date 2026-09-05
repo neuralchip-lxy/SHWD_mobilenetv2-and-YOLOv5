@@ -1,0 +1,179 @@
+# Combination candidate: channel reallocation + P3 local/dilated context.
+# Explicit channels, depth_multiple unchanged; Detect uses layers 19/22/25.
+nc: 2
+depth_multiple: 0.33
+width_multiple: 1.0
+anchors:
+- - 10
+  - 13
+  - 16
+  - 30
+  - 33
+  - 23
+- - 30
+  - 61
+  - 62
+  - 45
+  - 59
+  - 119
+- - 116
+  - 90
+  - 156
+  - 198
+  - 373
+  - 326
+backbone:
+- - -1
+  - 1
+  - Conv
+  - - 24
+    - 3
+    - 2
+- - -1
+  - 1
+  - MobileNetV2Block
+  - - 24
+    - 1
+    - 1
+- - -1
+  - 1
+  - MobileNetV2Block
+  - - 40
+    - 2
+    - 6
+- - -1
+  - 2
+  - MobileNetV2Block
+  - - 40
+    - 1
+    - 6
+- - -1
+  - 1
+  - MobileNetV2Block
+  - - 96
+    - 2
+    - 6
+- - -1
+  - 3
+  - MobileNetV2Block
+  - - 96
+    - 1
+    - 6
+- - -1
+  - 1
+  - MobileNetV2Block
+  - - 160
+    - 2
+    - 6
+- - -1
+  - 4
+  - MobileNetV2Block
+  - - 160
+    - 1
+    - 6
+- - -1
+  - 1
+  - MobileNetV2Block
+  - - 256
+    - 2
+    - 6
+- - -1
+  - 2
+  - MobileNetV2Block
+  - - 256
+    - 1
+    - 6
+- - -1
+  - 1
+  - SPPF
+  - - 256
+    - 5
+head:
+- - -1
+  - 1
+  - Conv
+  - - 160
+    - 1
+    - 1
+- - -1
+  - 1
+  - nn.Upsample
+  - - None
+    - 2
+    - nearest
+- - - -1
+    - 7
+  - 1
+  - Concat
+  - - 1
+- - -1
+  - 3
+  - C3
+  - - 160
+    - false
+- - -1
+  - 1
+  - Conv
+  - - 96
+    - 1
+    - 1
+- - -1
+  - 1
+  - nn.Upsample
+  - - None
+    - 2
+    - nearest
+- - - -1
+    - 5
+  - 1
+  - Concat
+  - - 1
+- - -1
+  - 3
+  - C3
+  - - 96
+    - false
+- - -1
+  - 1
+  - P3LocalContext
+  - - 96
+    - 2
+- - -1
+  - 1
+  - Conv
+  - - 96
+    - 3
+    - 2
+- - - -1
+    - 15
+  - 1
+  - Concat
+  - - 1
+- - -1
+  - 3
+  - C3
+  - - 160
+    - false
+- - -1
+  - 1
+  - Conv
+  - - 160
+    - 3
+    - 2
+- - - -1
+    - 11
+  - 1
+  - Concat
+  - - 1
+- - -1
+  - 3
+  - C3
+  - - 256
+    - false
+- - - 19
+    - 22
+    - 25
+  - 1
+  - Detect
+  - - nc
+    - anchors

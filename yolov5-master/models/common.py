@@ -91,6 +91,23 @@ class Conv(nn.Module):
         return self.act(self.conv(x))
 
 
+class P3LocalContext(nn.Module):
+    """Refine P3 with local/dilated depthwise branches and a linear residual fusion."""
+
+    def __init__(self, c1, c2, dilation=2):
+        """Keep channels unchanged; dilation=1 provides the ordinary-convolution control."""
+        super().__init__()
+        if c1 != c2:
+            raise ValueError("P3LocalContext requires equal input and output channels")
+        self.local = Conv(c1, c1, 3, g=c1)
+        self.context = Conv(c1, c1, 3, g=c1, d=dilation)
+        self.fuse = Conv(2 * c1, c2, 1, act=False)
+
+    def forward(self, x):
+        """Fuse both spatial contexts while retaining the original P3 feature."""
+        return x + self.fuse(torch.cat((self.local(x), self.context(x)), dim=1))
+
+
 class QATConv2d(nn.Conv2d):
     """Conv2d with per-output-channel fake weight quantization for mixed-precision QAT."""
 
