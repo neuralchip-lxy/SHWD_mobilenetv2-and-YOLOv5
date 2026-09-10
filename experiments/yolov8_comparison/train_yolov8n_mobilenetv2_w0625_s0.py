@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parent
 MODEL = ROOT / 'yolov8n_mobilenetv2_w0625.yaml'
 NAME = 'yolov8n_mobilenetv2_w0625_640_s0_scratch'
 TRAIN_ARGS = {**BASELINE_TRAIN_ARGS, 'name': NAME}
-RUN = Path(TRAIN_ARGS['project']) / TRAIN_ARGS['name']
 VAL_ARGS = dict(
     data=TRAIN_ARGS['data'], split='test', imgsz=640, batch=4, device=0,
     workers=4, conf=0.001, iou=0.6, max_det=300,
@@ -31,12 +30,12 @@ VAL_ARGS = dict(
 )
 
 
-def check():
+def check(model_path=MODEL, train_args=TRAIN_ARGS, val_args=VAL_ARGS, neck_channels=(64, 128, 256)):
     """Check shapes, native loss gradients, fusion and checkpoint reload; no optimizer steps."""
     torch.set_num_threads(4)
     torch.manual_seed(0)
-    get_cfg(overrides=TRAIN_ARGS)
-    get_cfg(overrides=VAL_ARGS)
+    get_cfg(overrides=train_args)
+    get_cfg(overrides=val_args)
     data = yaml.safe_load(DATA.read_text(encoding='utf-8'))
     extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
     for split, expected in [('train', 5457), ('val', 607), ('test', 1517)]:
@@ -46,29 +45,46 @@ def check():
         print(f'{split}: {count} images', flush=True)
     assert data['names'] == ['hat', 'person'], data['names']
 
-    yolo = YOLO(str(MODEL), task='detect')
+    yolo = YOLO(str(model_path), task='detect')
     model = yolo.model.eval()
     baseline = DetectionModel(copy.deepcopy(YOLO('yolov8n.yaml').model.yaml), nc=2, verbose=False).eval()
-    # Original SPPF and every neck/head module retain identical types and tensor shapes.
+    # Channel reallocation keeps module types and topology; original mode also keeps shapes.
     for new, old in zip(list(model.model)[7:], list(baseline.model)[9:], strict=True):
         assert type(new) is type(old), (type(new), type(old))
-        assert {k: v.shape for k, v in new.state_dict().items()} == {
-            k: v.shape for k, v in old.state_dict().items()
-        }
-    changed = {key for key in TRAIN_ARGS if TRAIN_ARGS[key] != BASELINE_TRAIN_ARGS[key]}
+        assert new.state_dict().keys() == old.state_dict().keys()
+        if neck_channels == (64, 128, 256):
+            assert {k: v.shape for k, v in new.state_dict().items()} == {
+                k: v.shape for k, v in old.state_dict().items()
+            }
+    original_cfg = yaml.safe_load(MODEL.read_text(encoding='utf-8'))
+    selected_cfg = yaml.safe_load(Path(model_path).read_text(encoding='utf-8'))
+    for new, old in zip(selected_cfg['backbone'] + selected_cfg['head'],
+                        original_cfg['backbone'] + original_cfg['head'], strict=True):
+        assert new[:3] == old[:3], (new, old)  # same connections, repeats and layer types
+        if new[2] in ('Conv', 'C2f', 'SPPF'):
+            expected_channel = dict(zip((64, 128, 256), neck_channels))[old[3][0]]
+            assert new[3] == [expected_channel, *old[3][1:]], (new, old)
+        else:
+            assert new[3] == old[3], (new, old)  # includes backbone width and Index outputs
+    changed = {key for key in train_args if train_args[key] != BASELINE_TRAIN_ARGS[key]}
     assert changed == {'name'}, changed
     sample = torch.rand(1, 3, 640, 640)
+    head_shapes = []
+    handle = model.model[-1].register_forward_pre_hook(
+        lambda module, inputs: head_shapes.extend(tuple(x.shape) for x in inputs[0]))
     with torch.no_grad():
         features = model.model[0](sample)
         assert [tuple(x.shape) for x in features] == [(1, 24, 80, 80), (1, 64, 40, 40), (1, 200, 20, 20)]
         predictions = model(sample)[0]
         assert predictions.shape == (1, 6, 8400), predictions.shape
         assert torch.isfinite(predictions).all()
+    handle.remove()
+    assert head_shapes == [(1, c, s, s) for c, s in zip(neck_channels, (80, 40, 20))], head_shapes
     assert model.stride.tolist() == [8, 16, 32]
 
     # A separate copy exercises the real detection loss and every trainable parameter.
     training_model = copy.deepcopy(model).train()
-    training_model.args = get_cfg(overrides=TRAIN_ARGS)
+    training_model.args = get_cfg(overrides=train_args)
     batch = dict(img=torch.rand(2, 3, 128, 128), batch_idx=torch.tensor([0, 1]),
                  cls=torch.tensor([[0.], [1.]]),
                  bboxes=torch.tensor([[0.5, 0.5, 0.3, 0.3], [0.4, 0.6, 0.2, 0.2]]))
@@ -97,16 +113,18 @@ def check():
         torch.testing.assert_close(model(sample)[0], predictions, rtol=1e-4, atol=1e-3)
     assert not any(isinstance(module, torch.nn.BatchNorm2d) for module in model.modules())
     baseline.fuse(verbose=False)
-    for label, item in [('YOLOv8n baseline', baseline), ('MobileNetV2 W0.625', model)]:
+    for label, item in [('YOLOv8n baseline', baseline), (Path(model_path).stem, model)]:
         print(f'{label}: fused params={sum(p.numel() for p in item.parameters()):,}; '
               f'GFLOPs@640={get_flops(item, imgsz=640):.4f}', flush=True)
     print(f'Unfused custom params: {unfused_count:,}')
-    print('CHECK PASSED: data, unchanged neck/head, forward, loss/backward, checkpoint and fusion. '
+    print(f'Neck channels: {neck_channels}; run: {train_args["name"]}')
+    print('CHECK PASSED: data, topology/channel contract, forward, loss/backward, checkpoint and fusion. '
           'No training or test-set evaluation started.', flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--realloc', action='store_true', help='Use P3/P4/P5 channels 64/96/192 in a separate run')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='Run synthetic checks without training')
     mode.add_argument('--resume', action='store_true', help='Resume this run from weights/last.pt')
@@ -114,27 +132,33 @@ def main():
     args = parser.parse_args()
     if ultralytics.__version__ != '8.4.89':
         raise RuntimeError('Use ultralytics 8.4.89, the same version as the YOLOv8n baseline.')
+    model_path = ROOT / 'yolov8n_mobilenetv2_w0625_realloc.yaml' if args.realloc else MODEL
+    run_name = 'yolov8n_mobilenetv2_w0625_realloc_640_s0_scratch' if args.realloc else NAME
+    train_args = {**TRAIN_ARGS, 'name': run_name}
+    val_args = {**VAL_ARGS, 'name': run_name + '_test'}
+    run = Path(train_args['project']) / run_name
+    print(f'Model: {model_path}\nRun: {run}', flush=True)
     if args.check:
-        check()
+        check(model_path, train_args, val_args, (64, 96, 192) if args.realloc else (64, 128, 256))
     elif args.resume:
-        checkpoint = RUN / 'weights/last.pt'
+        checkpoint = run / 'weights/last.pt'
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         YOLO(str(checkpoint), task='detect').train(resume=True)
     elif args.test:
-        checkpoint = RUN / 'weights/best.pt'
+        checkpoint = run / 'weights/best.pt'
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
-        metrics = YOLO(str(checkpoint), task='detect').val(**VAL_ARGS)
+        metrics = YOLO(str(checkpoint), task='detect').val(**val_args)
         print(f'Test mAP50: {metrics.box.map50:.6f}')
         print(f'Test mAP50-95: {metrics.box.map:.6f}')
         print(f'Results: {metrics.save_dir}')
     else:
-        if RUN.exists():
-            raise FileExistsError(f'{RUN} already exists; use --resume for an interrupted run.')
+        if run.exists():
+            raise FileExistsError(f'{run} already exists; use --resume for an interrupted run.')
         if not DATA.is_file():
             raise FileNotFoundError(DATA)
-        YOLO(str(MODEL), task='detect').train(**TRAIN_ARGS)
+        YOLO(str(model_path), task='detect').train(**train_args)
 
 
 if __name__ == '__main__':
