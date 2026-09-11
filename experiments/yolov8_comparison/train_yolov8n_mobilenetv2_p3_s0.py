@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 import ultralytics
+import yaml
 
 from p3_structure import P3YOLO
 from train_yolov8n_s0 import DATA, TRAIN_ARGS as BASELINE_TRAIN_ARGS
@@ -23,8 +24,8 @@ def configuration(variant):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--variant', choices=('combo', 'gate', 'rep'), default='combo',
-                        help='combo: both modules; gate/rep: the corresponding single-module ablation')
+    parser.add_argument('--variant', choices=('combo', 'gate', 'rep', 'gate_bounded'), default='combo',
+                        help='combo: G+R; gate/rep: single module; gate_bounded: gate range 0.5 to 1.5, no R')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='Synthetic checks only, no training')
     mode.add_argument('--resume', action='store_true', help='Resume this variant from last.pt')
@@ -46,7 +47,7 @@ def main():
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         yolo = P3YOLO(str(checkpoint), task='detect')
-        expected = {'gate': args.variant != 'rep', 'rep': args.variant != 'gate'}
+        expected = yaml.safe_load(model.read_text(encoding='utf-8'))['p3_design']
         if yolo.model.yaml.get('p3_design') != expected:
             raise RuntimeError('Checkpoint P3 design does not match the selected variant.')
         if args.resume:

@@ -13,7 +13,8 @@ from ultralytics.cfg import get_cfg
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils.torch_utils import get_flops
 
-from p3_structure import GatedP3Concat, P3DetectionModel, P3DetectionTrainer, P3YOLO, RepDepthwise5, RepP3Bottleneck
+from p3_structure import (BoundedGatedP3Concat, GatedP3Concat, P3DetectionModel, P3DetectionTrainer,
+                          P3YOLO, RepDepthwise5, RepP3Bottleneck)
 from train_yolov8n_s0 import TRAIN_ARGS as BASELINE_TRAIN_ARGS
 from train_yolov8n_mobilenetv2_w0625_s0 import ROOT as BASE_ROOT
 
@@ -27,6 +28,23 @@ def unit_checks():
     gated = gate([semantic, lateral])
     assert torch.equal(gated[:, 96:], lateral), 'The lateral path must be unchanged.'
     assert not torch.equal(gated[:, :96], semantic), 'Gate must actually affect the semantic input.'
+
+    bounded = BoundedGatedP3Concat().eval()
+    assert torch.equal(bounded([semantic, lateral]), torch.cat((semantic, lateral), 1))
+    assert {k: v.shape for k, v in bounded.state_dict().items()} == {
+        k: v.shape for k, v in gate.state_dict().items()}
+    logits = torch.linspace(-100, 100, 1001)
+    weights = bounded.gate_weight(logits)
+    assert weights.min() >= 0.5 and weights.max() <= 1.5
+    for module in (gate, bounded):
+        zero = torch.tensor(0., requires_grad=True)
+        value = module.gate_weight(zero)
+        value.backward()
+        assert value.item() == 1 and zero.grad.item() == 0.5
+    bounded.load_state_dict(gate.state_dict())
+    bounded_out = bounded([semantic, lateral])
+    assert torch.equal(bounded_out[:, 96:], lateral)
+    assert not torch.equal(bounded_out[:, :96], semantic)
 
     block = RepDepthwise5(8).eval()
     with torch.no_grad():
@@ -94,6 +112,7 @@ def check(model_path, train_args, val_args):
             assert {k: v.shape for k, v in new.state_dict().items()} == {
                 k: v.shape for k, v in old.state_dict().items()}
     assert isinstance(model.model[12], GatedP3Concat) == design['gate']
+    assert isinstance(model.model[12], BoundedGatedP3Concat) == (design.get('gate_mode') == 'bounded')
     assert isinstance(model.model[13].m[0], RepP3Bottleneck) == design['rep']
     assert model.stride.tolist() == [8, 16, 32]
     head_shapes = []

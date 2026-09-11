@@ -30,11 +30,24 @@ class GatedP3Concat(nn.Module):
         nn.init.zeros_(self.gate[-1].weight)
         nn.init.zeros_(self.gate[-1].bias)
 
+    @staticmethod
+    def gate_weight(logits):
+        return 2 * logits.sigmoid()
+
     def forward(self, features):
         semantic, lateral = features
         joined = torch.cat((semantic, lateral), dim=1)
-        weight = 2 * self.gate(joined).sigmoid()
+        weight = self.gate_weight(self.gate(joined))
         return torch.cat((semantic * weight, lateral), dim=1)
+
+
+class BoundedGatedP3Concat(GatedP3Concat):
+    """Same generator and gated branch; change only the transfer function to [0.5, 1.5]."""
+
+    @staticmethod
+    def gate_weight(logits):
+        # At zero, both this function and 2*sigmoid have value 1 and derivative 0.5.
+        return 1 + 0.5 * logits.tanh()
 
 
 class RepDepthwise5(nn.Module):
@@ -95,10 +108,13 @@ and resume. Strides stay 8/16/32: both modifications preserve their interfaces.
         register_backbone()
         super().__init__(cfg, ch=ch, nc=nc, verbose=False)
         design = self.yaml.get('p3_design')
-        if not isinstance(design, dict) or set(design) != {'gate', 'rep'}:
-            raise ValueError('P3DetectionModel requires p3_design: {gate: bool, rep: bool}.')
-        if any(type(value) is not bool for value in design.values()):
+        if not isinstance(design, dict) or set(design) not in ({'gate', 'rep'}, {'gate', 'rep', 'gate_mode'}):
+            raise ValueError('p3_design requires gate/rep booleans and an optional gate_mode.')
+        if any(type(design[key]) is not bool for key in ('gate', 'rep')):
             raise ValueError('p3_design switches must be YAML booleans.')
+        gate_mode = design.get('gate_mode', 'standard')
+        if gate_mode not in ('standard', 'bounded') or (gate_mode == 'bounded' and not design['gate']):
+            raise ValueError('gate_mode must be standard or bounded; bounded requires gate=true.')
         if len(self.model) != 21 or not isinstance(self.model[12], Concat):
             raise ValueError('This experiment requires the fixed 21-layer realloc graph.')
         if self.model[12].f != [-1, 2]:
@@ -108,10 +124,10 @@ and resume. Strides stay 8/16/32: both modifications preserve their interfaces.
             raise ValueError('Expected P3 C2f(160, 64) with one internal 32-channel block.')
         if design['gate']:
             original = self.model[12]
-            replacement = GatedP3Concat()
+            replacement = BoundedGatedP3Concat() if gate_mode == 'bounded' else GatedP3Concat()
             initialize_weights(replacement)  # match native YOLO BN eps/momentum
             replacement.i, replacement.f = original.i, original.f
-            replacement.type = 'p3_structure.GatedP3Concat'
+            replacement.type = f'p3_structure.{type(replacement).__name__}'
             replacement.np = sum(p.numel() for p in replacement.parameters())
             self.model[12] = replacement
         if design['rep']:
@@ -120,7 +136,8 @@ and resume. Strides stay 8/16/32: both modifications preserve their interfaces.
             c2f.m[0] = replacement
             c2f.np = sum(p.numel() for p in c2f.parameters())
         if verbose:
-            LOGGER.info(f'P3 design: gate={design["gate"]}, rep={design["rep"]}; channels=64/96/192')
+            LOGGER.info(f'P3 design: gate={design["gate"]}, rep={design["rep"]}, '
+                        f'gate_mode={gate_mode}; channels=64/96/192')
             self.info()
 
     def fuse(self, verbose=True):
