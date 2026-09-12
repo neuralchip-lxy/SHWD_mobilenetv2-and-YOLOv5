@@ -1,0 +1,30 @@
+# C + stride-4 detail path. No gate, no Rep block, no P2 detection head.
+nc: 2
+depth_multiple: 1.0
+width_multiple: 1.0
+backbone:
+  - [-1, 1, MobileNetV2ShallowBackbone, [0.625]]
+  - [0, 1, Index, [24, 0]]
+  - [-1, 1, Conv, [64, 1, 1]]
+  - [0, 1, Index, [64, 1]]
+  - [-1, 1, Conv, [96, 1, 1]]
+  - [0, 1, Index, [200, 2]]
+  - [-1, 1, Conv, [192, 1, 1]]
+  - [-1, 1, SPPF, [192, 5]]
+  - [0, 1, Index, [16, 3]]                    # 8: stride 4
+  - [-1, 1, Conv, [16, 3, 2, null, 16]]       # 9: depthwise downsample to stride 8
+  - [-1, 1, Conv, [16, 1, 1]]                 # 10: pointwise detail projection
+head:
+  - [7, 1, nn.Upsample, [null, 2, nearest]]   # 11
+  - [[-1, 4], 1, Concat, [1]]                # 12
+  - [-1, 1, C2f, [96]]                       # 13
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]  # 14
+  - [[-1, 2, 10], 1, Concat, [1]]            # 15: 96+64+16=176
+  - [-1, 1, C2f, [64]]                       # 16: P3
+  - [-1, 1, Conv, [64, 3, 2]]                # 17
+  - [[-1, 13], 1, Concat, [1]]               # 18
+  - [-1, 1, C2f, [96]]                       # 19: P4
+  - [-1, 1, Conv, [96, 3, 2]]                # 20
+  - [[-1, 7], 1, Concat, [1]]                # 21
+  - [-1, 1, C2f, [192]]                      # 22: P5
+  - [[16, 19, 22], 1, Detect, [nc]]           # 23
