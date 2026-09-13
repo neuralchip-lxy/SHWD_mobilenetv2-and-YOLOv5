@@ -1,0 +1,38 @@
+# Full experiment: C backbone/channel allocation + lightweight P2 + task-specific P2/P3 head.
+# Must use P2TaskYOLO; plain YOLO(YAML) would build a native Detect head.
+nc: 2
+depth_multiple: 1.0
+width_multiple: 1.0
+p2_task_design: adjacent_task_fusion_v1
+backbone:
+  - [-1, 1, MobileNetV2ShallowBackbone, [0.625]]
+  - [0, 1, Index, [24, 0]]
+  - [-1, 1, Conv, [64, 1, 1]]
+  - [0, 1, Index, [64, 1]]
+  - [-1, 1, Conv, [96, 1, 1]]
+  - [0, 1, Index, [200, 2]]
+  - [-1, 1, Conv, [192, 1, 1]]
+  - [-1, 1, SPPF, [192, 5]]                  # 7
+  - [0, 1, Index, [16, 3]]                  # 8: stride 4
+  - [-1, 1, Conv, [32, 1, 1]]               # 9: P2 adapter
+head:
+  - [7, 1, nn.Upsample, [null, 2, nearest]]  # 10
+  - [[-1, 4], 1, Concat, [1]]               # 11
+  - [-1, 1, C2f, [96]]                      # 12: top-down P4
+  - [-1, 1, nn.Upsample, [null, 2, nearest]] # 13
+  - [[-1, 2], 1, Concat, [1]]               # 14
+  - [-1, 1, C2f, [64]]                      # 15: top-down P3
+  - [-1, 1, nn.Upsample, [null, 2, nearest]] # 16
+  - [[-1, 9], 1, Concat, [1]]               # 17
+  - [-1, 1, C2f, [32]]                      # 18: detection P2
+  - [-1, 1, Conv, [32, 3, 2, null, 32]]     # 19: DW downsample
+  - [-1, 1, Conv, [64, 1, 1]]               # 20: PW projection
+  - [[-1, 15], 1, Concat, [1]]              # 21
+  - [-1, 1, C2f, [64]]                      # 22: detection P3
+  - [-1, 1, Conv, [64, 3, 2]]               # 23
+  - [[-1, 12], 1, Concat, [1]]              # 24
+  - [-1, 1, C2f, [96]]                      # 25: detection P4
+  - [-1, 1, Conv, [96, 3, 2]]               # 26
+  - [[-1, 7], 1, Concat, [1]]               # 27
+  - [-1, 1, C2f, [192]]                     # 28: detection P5
+  - [[18, 22, 25, 28], 1, Detect, [nc]]     # 29: replaced by P2TaskModel
