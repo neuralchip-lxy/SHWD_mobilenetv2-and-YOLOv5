@@ -1,0 +1,14 @@
+{
+  "data_yaml_sha256": "925a337f0ac9997ee96a2e42131f3bb200fca3b6f4a9d3c8141e4dc873c00d3e",
+  "split_manifest_sha256": "ea2791a63804d2c36cb4568ae4499f0730226582bbb674082acd60b11752bcaa",
+  "variant": "combo",
+  "seed": 0,
+  "names": [
+    "helmet",
+    "head_with_helmet",
+    "person_with_helmet",
+    "head",
+    "person_no_helmet",
+    "face"
+  ]
+}
