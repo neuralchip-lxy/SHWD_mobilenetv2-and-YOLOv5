@@ -6,10 +6,10 @@ import cv2
 import numpy as np
 from PIL import Image
 
-ROOT=Path('E:/datasets/SHEL5K_original/9rcv8mm682-4/Safety Helmet Wearing Dataset')
-SHWD=Path('E:/codex_work/experiment of mobilenet2 and YOLO5/SHWD_YOLO/images')
-OUT=Path('E:/experiment_M2Y5/shel5k_preparation')
-OUT.mkdir(exist_ok=True)
+from experiment_paths import path_for, resolve_path
+ROOT=path_for('shel5k_source')
+SHWD=path_for('shwd_root')/'images'
+OUT=path_for('shel5k_audit')
 
 def hashes(path):
     with Image.open(path) as im:
@@ -81,6 +81,6 @@ if __name__=='__main__':
     parser.add_argument('--shwd-images',type=Path,default=SHWD)
     parser.add_argument('--output',type=Path,default=OUT)
     args=parser.parse_args()
-    ROOT,SHWD,OUT=args.source,args.shwd_images,args.output
+    ROOT,SHWD,OUT=map(resolve_path,(args.source,args.shwd_images,args.output))
     OUT.mkdir(parents=True,exist_ok=True)
     main()

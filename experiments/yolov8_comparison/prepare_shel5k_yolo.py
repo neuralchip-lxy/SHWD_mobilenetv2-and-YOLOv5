@@ -11,6 +11,7 @@ import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 import yaml
+from experiment_paths import path_for, resolve_path
 
 NAMES = ['helmet', 'head_with_helmet', 'person_with_helmet', 'head', 'person_no_helmet', 'face']
 
@@ -86,7 +87,7 @@ def prepare(audit_dir, output):
         for r in records:
             shutil.copy2(r['image'],image_dir/Path(r['image']).name)
             (label_dir/(r['id']+'.txt')).write_text(labels[r['id']],encoding='utf-8')
-    (output/'shel5k.yaml').write_text(yaml.safe_dump(dict(path=output.as_posix(),train='images/train',val='images/val',test='images/test',nc=6,names=NAMES),sort_keys=False),encoding='utf-8')
+    (output/'shel5k.yaml').write_text(yaml.safe_dump(dict(path='.',train='images/train',val='images/val',test='images/test',nc=6,names=NAMES),sort_keys=False),encoding='utf-8')
     (output/'split_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     summary=dict(classes=NAMES,excluded_images=excluded,split_seed=20260920,target_ratios=ratios,split=per_split,groups=len(groups),
                  largest_group=max(map(len,groups.values())),corrections=corrections,overlap_audit=audit,
@@ -101,7 +102,7 @@ def prepare(audit_dir, output):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--audit-dir',type=Path,default=Path('E:/experiment_M2Y5/shel5k_preparation'))
-    parser.add_argument('--output',type=Path,default=Path('E:/experiment_M2Y5/datasets/SHEL5K6_YOLO_v1'))
+    parser.add_argument('--audit-dir',type=Path,default=path_for('shel5k_audit'))
+    parser.add_argument('--output',type=Path,default=path_for('shel5k_yolo'))
     args=parser.parse_args()
-    prepare(args.audit_dir,args.output)
+    prepare(resolve_path(args.audit_dir),resolve_path(args.output))

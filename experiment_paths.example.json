@@ -1,0 +1,8 @@
+{
+  "runs": "outputs/analysis_runs",
+  "shwd_yaml": "SHWD_YOLO/shwd.yaml",
+  "shwd_root": "SHWD_YOLO",
+  "shel5k_yolo": "datasets/SHEL5K6_YOLO_v1",
+  "shel5k_source": "datasets/SHEL5K_original/9rcv8mm682-4/Safety Helmet Wearing Dataset",
+  "shel5k_audit": "outputs/shel5k_preparation"
+}

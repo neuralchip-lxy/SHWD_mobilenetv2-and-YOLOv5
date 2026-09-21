@@ -12,8 +12,9 @@ from ultralytics.cfg import get_cfg
 
 
 ROOT = Path(__file__).resolve().parent
-DATA = Path('E:/codex_work/experiment of mobilenet2 and YOLO5/yolov5-paper/SHWD_YOLO/shwd.yaml')
-PROJECT = Path('E:/experiment_M2Y5/analysis_runs')
+from experiment_paths import shwd_data, path_for
+DATA = shwd_data()
+PROJECT = path_for('runs')
 NAME = 'yolov8n_640_s0_scratch'
 RUN = PROJECT / NAME
 

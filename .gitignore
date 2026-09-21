@@ -19,3 +19,8 @@ wandb/
 # Pretrained weights can be downloaded again; trained baseline weights under
 # yolov5-master/runs/train/**/weights/ are intentionally retained.
 yolov5-master/yolov5s.pt
+
+# Machine-specific paths and portable runtime outputs
+/experiment_paths.local.json
+/outputs/
+/datasets/

@@ -15,7 +15,8 @@ from train_yolov8n_s0 import TRAIN_ARGS
 from train_yolov8n_mobilenetv2_w0625_s0 import VAL_ARGS
 
 ROOT=Path(__file__).resolve().parent
-DATA=Path('E:/experiment_M2Y5/datasets/SHEL5K6_YOLO_v1/shel5k.yaml')
+from experiment_paths import shel5k_data, path_for, resolve_path, normalize_data_yaml
+DATA=shel5k_data()
 MODEL=ROOT/'yolov8n_mobilenetv2_w0625_p2_task_shel5k6.yaml'
 NAMES=['helmet','head_with_helmet','person_with_helmet','head','person_no_helmet','face']
 
@@ -51,10 +52,12 @@ def main():
     parser.add_argument('--variant',choices=('baseline','combo'),default='baseline')
     parser.add_argument('--seed',type=int,choices=(0,1,2),default=0)
     parser.add_argument('--data',type=Path,default=DATA)
-    parser.add_argument('--project',type=Path,default=Path('E:/experiment_M2Y5/analysis_runs/shel5k6'))
+    parser.add_argument('--project',type=Path,default=path_for('runs')/'shel5k6')
     mode=parser.add_mutually_exclusive_group()
     for option in ('dry-run','check','resume','val','test'): mode.add_argument('--'+option,action='store_true')
     args=parser.parse_args()
+    args.data=normalize_data_yaml(args.data)
+    args.project=resolve_path(args.project)
     if ultralytics.__version__!='8.4.89': raise RuntimeError('Use ultralytics 8.4.89.')
     data=yaml.safe_load(args.data.read_text(encoding='utf-8'))
     if data['nc']!=6 or data['names']!=NAMES: raise ValueError('SHEL5K six-class mapping mismatch.')
