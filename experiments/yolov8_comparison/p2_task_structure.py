@@ -23,7 +23,7 @@ Wider branches allocate capacity; they do not impose learned attention weights.
 """
     def __init__(self, local_channels, semantic_channels, local_width, semantic_width, output_width):
         super().__init__()
-        self.local = Conv(local_channels, local_width, 1)
+        self.local = Conv(local_channels, local_width, 1)  # 这里面没有特指激活函数是什么，那么就用默认的SiLU= x * sigmoid(x)
         self.semantic = Conv(semantic_channels, semantic_width, 1)
         self.mix = Conv(local_width + semantic_width, output_width, 1)
 

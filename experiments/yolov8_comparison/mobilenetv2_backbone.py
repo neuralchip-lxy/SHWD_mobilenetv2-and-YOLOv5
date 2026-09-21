@@ -45,7 +45,7 @@ class MobileNetV2Backbone(nn.Module):
             raise ValueError('width_mult must be positive')
         self.width_mult = width_mult
         channels = make_divisible(32 * width_mult)
-        self.stem = Conv(3, channels, 3, 2, act=nn.ReLU6(inplace=True))
+        self.stem = Conv(3, channels, 3, 2, act=nn.ReLU6(inplace=True))  # 括号里面分别是输入通道，输出通道，卷积核大小，步长，激活函数选择
         # expansion, unscaled output channels, repeats, first-block stride
         settings = [(1, 16, 1, 1), (6, 24, 2, 2), (6, 32, 3, 2),
                     (6, 64, 4, 2), (6, 96, 3, 1), (6, 160, 3, 2), (6, 320, 1, 1)]
